@@ -147,11 +147,17 @@ class DCP_Agent():
         self.rollout_trajectory_tuple = []
                 
         # collision checking parameter
-        self.robot_radius = 5.0
+        self.robot_radius = 2.5
         self.move_gap = 2.5
         self.time_expansion_rate = 0.09
         
         self.check_radius = self.robot_radius
+        
+        # load_transition_model
+        load_step = 0
+        self.train_step = load_step
+        self.ensemble_transition_model.load(load_step=load_step)
+        self.save_frequency = 100
       
     def act(self, candidate_trajectories_tuple, dynamic_map):
         obs = self.wrap_state(dynamic_map)
@@ -162,6 +168,12 @@ class DCP_Agent():
         dcp_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
         print("worst_Q_list",worst_Q_list,used_worst_Q_list)
         print("dcp_action",dcp_action)
+        
+        self.ensemble_transition_model.add_training_data(obs, done=False)
+        self.ensemble_transition_model.update_model()
+        self.train_step += 1
+        if self.train_step % self.save_frequency == 0:
+            self.ensemble_transition_model.save(train_step=self.train_step)
         return dcp_action
 
     def wrap_state(self, dynamic_map):
@@ -360,11 +372,13 @@ class DCP_Transition_Model():
         
         
         history_obs = self.normalize_state(history_obs)        
+        print("debug",history_obs)      
+
         history_obs = torch.tensor(history_obs).to(self.device)
 
         predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
         predict_action = predict_action.cpu().detach().numpy()
-        
+
         time1 = time.time()
 
         for j in range(1, vehicle_num):  # exclude ego vehicle
@@ -393,6 +407,7 @@ class DCP_Transition_Model():
             path.append(y_list)
             path.append(yaw_list)
             rollout_trajectory.append(path)
+        print("debug",rollout_trajectory[0][1][-1])      
 
         time2 = time.time()
         # print("time",time2-time1)
@@ -420,7 +435,7 @@ class DCP_Transition_Model():
             if history_obs[i][0] != -999: # use -100 as signal, very unstable
                 vehicle_num += 1
 
-        history_obs = self.normalize_state(history_obs)        
+        history_obs = self.normalize_state(history_obs)  
         history_obs = torch.tensor(history_obs).to(self.device)
         time2 = time.time()
 
@@ -453,15 +468,22 @@ class DCP_Transition_Model():
     def normalize_state(self, history_obs):
         normalize_state = []
         obs = history_obs
+        if isinstance(obs[0], np.ndarray):
+            obs = obs[0].tolist()
+        else:
+            obs = obs
         normalize_obs = copy.deepcopy(obs)
         obs_length = self.agent_num
+        ego_x = obs[0][0]
+        ego_y = obs[0][1]
+        
         for i in range(self.agent_num):
             if obs[i][0] == -999:
-                normalize_obs[i][0] = 20
-                normalize_obs[i][1] = 0
+                normalize_obs[i][0] = ego_x + 30
+                normalize_obs[i][1] = ego_y + 30
             else:
-                normalize_obs[i][0] = obs[i][0] - self.obs_bias_x
-                normalize_obs[i][1] = obs[i][1] - self.obs_bias_y
+                normalize_obs[i][0] = obs[i][0] - ego_x
+                normalize_obs[i][1] = obs[i][1] - ego_y
         normalize_state.append(normalize_obs)
         
         return (np.array(normalize_state).flatten()/self.obs_scale) # flatten to list
@@ -472,7 +494,7 @@ class DCP_Transition_Model():
             for k in range(1):
                 # one_trajectory = self.data[random.randint(0, len(self.data)-1)]
                 one_trajectory = self.data[0]
-
+                
                 history_obs = one_trajectory[0:self.history_frame] 
                 history_obs = self.normalize_state(history_obs)
                 history_obs = torch.tensor(history_obs).to(self.device)
@@ -572,7 +594,7 @@ class DCP_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.1, b=0.1)
+            nn.init.uniform_(m.weight, a=-0.5, b=0.5)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式
@@ -589,7 +611,7 @@ class DCP_Transition_Model():
             for i in range(self.ensemble_num):
 
                 self.ensemble_models[i].load_state_dict(
-                    torch.load('DCP_models/ensemble_models_%s_%s.pt' %
+                    torch.load('Agent/long_tail_planner/save_models/ensemble_models_%s_%s.pt' %
                                (load_step, i))
                 )
             print("[DCP] : Load Learned Model, Step=", load_step)
@@ -602,7 +624,7 @@ class DCP_Transition_Model():
         for i in range(self.ensemble_num):
             torch.save(
                 self.ensemble_models[i].state_dict(),
-                'DCP_models/ensemble_models_%s_%s.pt' % (train_step, i)
+                'modules/RLplanner/Agent/long_tail_planner/save_models/ensemble_models_%s_%s.pt' % (train_step, i)
             )
 
 

@@ -451,7 +451,7 @@ class Werling_planner_SP():
                 index = 2
 
             index = self.long_tail_planner.act(candidate_trajectories_tuple, self.dynamic_map)
-            # print("index")
+            print("index")
             
             if self.force_brake:
                 chosen_action_id = 0
