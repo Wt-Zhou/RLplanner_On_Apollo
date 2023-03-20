@@ -122,7 +122,7 @@ class DCP_Agent():
         
         # transition model parameter        
         self.ensemble_num = 5
-        self.used_ensemble_num = 5
+        self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 20 # Note that the length of candidate trajectories should larger than future frame
         self.obs_scale = 10
@@ -165,16 +165,13 @@ class DCP_Agent():
         rollout_trajectory_tuple = self.generate_imagined_trajectories(obs, candidate_trajectories_tuple)
 
         worst_Q_list, used_worst_Q_list = self.calculate_worst_Q_value(candidate_trajectories_tuple, rollout_trajectory_tuple)
-        dcp_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
+        dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
+        fast_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
         print("worst_Q_list",worst_Q_list,used_worst_Q_list)
         print("dcp_action",dcp_action)
         
-        self.ensemble_transition_model.add_training_data(obs, done=False)
-        self.ensemble_transition_model.update_model()
-        self.train_step += 1
-        if self.train_step % self.save_frequency == 0:
-            self.ensemble_transition_model.save(train_step=self.train_step)
-        return dcp_action, worst_Q_list
+        self.add_data_and_update_transition_model(obs)
+        return dcp_action, worst_Q_list, fast_action
 
     def wrap_state(self, dynamic_map):
         state  = []
@@ -305,6 +302,12 @@ class DCP_Agent():
         
         return False
         
+    def add_data_and_update_transition_model(self, obs):
+        self.ensemble_transition_model.add_training_data(obs, done=False)
+        self.ensemble_transition_model.update_model()
+        self.train_step += 1
+        if self.train_step % self.save_frequency == 0:
+            self.ensemble_transition_model.save(train_step=self.train_step)
        
 class DCP_Transition_Model():
     def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, obs_bias_x, obs_bias_y, 
@@ -514,8 +517,13 @@ class DCP_Transition_Model():
                     diff = (predict_action - target_action) / sigma
                     loss = torch.mean(0.5 * torch.pow(diff, 2) + torch.log(sigma))  
                     # loss = F.mse_loss(predict_action, target_action)
-                    print("------------loss", loss)
-
+                    print("------------loss", loss,i)
+                    with open("modules/RLplanner/Agent/long_tail_planner/loss_record.txt", 'a') as fw:
+                        fw.write(str(loss)) 
+                        fw.write(", ")
+                        fw.write(str(i)) 
+                        fw.write("\n")
+                        fw.close()   
                     # train
                     self.ensemble_optimizer[i].zero_grad()
                     loss.backward()

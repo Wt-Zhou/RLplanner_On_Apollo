@@ -102,6 +102,9 @@ class RtkPlayer(object):
         
         self.dcp_pub = node.create_writer('/RLplanner/dcp_trajectory',
                                                planning_pb2.ADCTrajectory)
+        
+        self.dcp_faster_pub = node.create_writer('/RLplanner/dcp_faster_trajectory',
+                                               planning_pb2.ADCTrajectory)
 
         self.speedmultiplier = 1
         self.terminating = False
@@ -366,8 +369,63 @@ class RtkPlayer(object):
         # self.logger.debug("Generated Planning Sequence: "
         #                 + str(self.sequence_num - 1))
         
+
+    def publish_virtual_faster_planningmsg_trajectory(self, trajectory):
+        # print("trajectory.trajectory",trajectory.trajectory)
+        if not self.localization_received:
+            self.logger.warning(
+                "localization not received yet when publish_planningmsg")
+            return
+
+        planningdata = planning_pb2.ADCTrajectory()
+        now = cyber_time.Time.now().to_sec()
+        planningdata.header.timestamp_sec = now
+        planningdata.header.module_name = "planning"
+        planningdata.header.sequence_num = self.sequence_num
+        self.sequence_num = self.sequence_num + 1
+
+
+        planningdata.total_path_length = self.data['s'][self.end] - \
+            self.data['s'][self.start]
+        # self.logger.info("total number of planning data point: %d" %
+        #                 (self.end - self.start))
+        planningdata.total_path_time = self.data['time'][self.end] - \
+            self.data['time'][self.start]
+        planningdata.gear = 1
+        planningdata.engage_advice.advice = \
+            drive_state_pb2.EngageAdvice.READY_TO_ENGAGE
+
+
+        for i in range(len(trajectory.trajectory)-2):
+            adc_point = pnc_point_pb2.TrajectoryPoint()
+            adc_point.path_point.x = trajectory.trajectory[i][0]
+            adc_point.path_point.y = trajectory.trajectory[i][1]
+            adc_point.path_point.z = 0
+            adc_point.path_point.kappa = -trajectory.trajectory[i][6]*0.1 #curvature
+            adc_point.path_point.dkappa = (trajectory.trajectory[i+1][6]-trajectory.trajectory[i][6])/0.1 #curvature_change_rate
+            adc_point.v =  trajectory.trajectory[i][3]
+            adc_point.a =  trajectory.trajectory[i][5]
+            adc_point.path_point.theta =  trajectory.trajectory[i][2]
+            adc_point.path_point.s = trajectory.trajectory[i][4]
+
+
+            # time_diff = self.data['time'][i] - \
+            #     self.data['time'][0]
+            start_time = 0
+            time_diff = 0.1*i - start_time
+
+            adc_point.relative_time = time_diff 
+
+            planningdata.trajectory_point.extend([adc_point])
+
+        planningdata.estop.is_estop = False
+    
+        self.dcp_faster_pub.write(planningdata)
+        # self.logger.debug("Generated Planning Sequence: "
+        #                 + str(self.sequence_num - 1))
         
-    def publish_virtual_planningmsg_trajectory(self, trajectory, action_id):
+        
+    def publish_virtual_dcp_planningmsg_trajectory(self, trajectory, action_id):
         # print("trajectory.trajectory",trajectory.trajectory)
         if not self.localization_received:
             self.logger.warning(
@@ -529,7 +587,7 @@ class Werling_planner_SP():
     def update_path(self, obs, done):# TODO: represent a obs
         if done or len(obs)<1:
             self.trajectory_planner.clear_buff(clean_csp=False)
-            return None, None, None
+            return None, None, None, None
         else:
             self.dynamic_map.update_map_from_list_obs(obs)
             if self.trajectory_planner.csp is not None and self.traffic_light_obs:
@@ -542,19 +600,26 @@ class Werling_planner_SP():
                 candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
                 index = 2
 
-            index, worst_q_list = self.long_tail_planner.act(candidate_trajectories_tuple, self.dynamic_map)
+            index, worst_q_list, fast_index = self.long_tail_planner.act(candidate_trajectories_tuple, self.dynamic_map)
             print("index")
             
             if self.force_brake:
                 chosen_action_id = 0
             else:
                 chosen_action_id = index
-            chosen_trajectory = self.trajectory_planner.trajectory_update_CP(chosen_action_id)
+            chosen_trajectory, faster_trajectory = self.trajectory_planner.trajectory_update_CP(chosen_action_id, fast_index)
 
             print("[Action_ID]",chosen_action_id)
             # print("[Traffic_Light]",self.traffic_light_obs)
 
-            return chosen_trajectory, chosen_action_id, worst_q_list
+            return chosen_trajectory, chosen_action_id, worst_q_list, faster_trajectory
+    
+    def purely_training(self, obs):
+        if len(obs)<1:
+            return None
+        self.dynamic_map.update_map_from_list_obs(obs)
+        obs = self.long_tail_planner.wrap_state(self.dynamic_map)
+        self.long_tail_planner.add_data_and_update_transition_model(obs)
     
     def read_ref_path_from_file(self):
         # record_file = os.path.join(APOLLO_ROOT, 'data/log/complex_left.csv')
@@ -678,11 +743,13 @@ def main():
         now = cyber_time.Time.now().to_sec()
         # # New add
         obs =  player.get_obs()
-        trajectory, action_id, worst_q_list = planner.update_path(obs, done=0)
+        # planner.purely_training(obs)
+        trajectory, action_id, worst_q_list, faster_trajectory = planner.update_path(obs, done=0)
         if trajectory is not None:
             player.publish_planningmsg_trajectory(trajectory, action_id)
-            player.publish_virtual_planningmsg_trajectory(trajectory, action_id)
+            player.publish_virtual_dcp_planningmsg_trajectory(trajectory, action_id)
             player.publish_worst_q_list(worst_q_list)
+            player.publish_virtual_faster_planningmsg_trajectory(faster_trajectory)
         
         
         # player.publish_planningmsg()

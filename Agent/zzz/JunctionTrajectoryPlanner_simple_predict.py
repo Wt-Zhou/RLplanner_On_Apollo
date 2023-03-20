@@ -169,7 +169,7 @@ class JunctionTrajectoryPlanner_SP(object):
         else:
             return None 
 
-    def trajectory_update_CP(self, DCP_action, update=True):
+    def trajectory_update_CP(self, DCP_action, faster_action=None, update=True):
 
         if DCP_action == 0:
             
@@ -183,7 +183,7 @@ class JunctionTrajectoryPlanner_SP(object):
             trajectory_action = TrajectoryAction(trajectory_array, [0] * len(trajectory_array), generated_trajectory)
             trajectory_action.original_trajectory.cf = 500
             trajectory_action.original_trajectory.s_d = [0] * len(trajectory_array)
-            return trajectory_action          
+            # return trajectory_action          
             
         bestpath = self.all_trajectory[int(DCP_action - 1)][0]
         # bestpath.s_d
@@ -193,16 +193,25 @@ class JunctionTrajectoryPlanner_SP(object):
                                                             bestpath.yaw, bestpath.s_d,
                                                              bestpath.s, bestpath.s_dd,
                                                              bestpath.c ]
+        trajectory_action = TrajectoryAction(trajectory_array, bestpath.s_d[:len(trajectory_array)], bestpath)
 
+        if faster_action is not None:
+            fasterpath = self.all_trajectory[int(faster_action - 1)][0]
+            # fasterpath.c.append(0)
+            faster_trajectory_array = np.c_[fasterpath.x, fasterpath.y, 
+                                                            fasterpath.yaw, fasterpath.s_d,
+                                                             fasterpath.s, fasterpath.s_dd,
+                                                             fasterpath.c ]
+            faster_trajectory_action = TrajectoryAction(faster_trajectory_array, fasterpath.s_d[:len(faster_trajectory_array)], fasterpath)
+            return trajectory_action, faster_trajectory_action
         
         # next time when you calculate start state
         if update==True:
             self.last_trajectory_array_rule = trajectory_array
             self.last_trajectory_rule = bestpath 
 
-        trajectory_action = TrajectoryAction(trajectory_array, bestpath.s_d[:len(trajectory_array)], bestpath)
         # print("[CP]: ------> CP Successful Planning")           
-        return trajectory_action
+        return trajectory_action, None
 
     def initialize(self, dynamic_map):
         self._dynamic_map = dynamic_map
