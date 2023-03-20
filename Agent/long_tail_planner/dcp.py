@@ -174,7 +174,7 @@ class DCP_Agent():
         self.train_step += 1
         if self.train_step % self.save_frequency == 0:
             self.ensemble_transition_model.save(train_step=self.train_step)
-        return dcp_action
+        return dcp_action, worst_Q_list
 
     def wrap_state(self, dynamic_map):
         state  = []
